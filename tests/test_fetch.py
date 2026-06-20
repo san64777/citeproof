@@ -91,3 +91,53 @@ def test_fetch_rejects_unsafe_url_before_any_network(monkeypatch: pytest.MonkeyP
     with pytest.raises(UnsafeURLError):
         fetch("http://169.254.169.254/latest/meta-data/")
     assert calls["n"] == 0  # never reached the network
+
+
+# --- redirect-SSRF: the guard must re-validate every hop, not just the initial URL ---
+
+def test_redirect_to_internal_target_is_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A public page that 302s to an internal address must NOT be followed (the confirmed finding).
+    from veriscrape import FetchRecord
+
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: _addrinfo("93.184.216.34"))  # public initial
+    fetched: list[str] = []
+
+    def fake_get(url: str, **kw: object) -> FetchRecord:
+        fetched.append(url)
+        return FetchRecord(url=url, status=302, headers={"location": "http://169.254.169.254/latest/meta-data/"})
+
+    monkeypatch.setattr("citeproof.fetch.veriscrape.get", fake_get)
+    with pytest.raises(UnsafeURLError):
+        fetch("https://evil.test/")
+    assert fetched == ["https://evil.test/"]  # the internal redirect target was NEVER requested
+
+
+def test_redirect_to_public_target_is_followed(monkeypatch: pytest.MonkeyPatch) -> None:
+    from veriscrape import FetchRecord, Verdict
+
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: _addrinfo("93.184.216.34"))
+
+    def fake_get(url: str, **kw: object) -> FetchRecord:
+        if url == "https://a.test/":
+            return FetchRecord(url=url, status=301, headers={"location": "https://b.test/"})
+        return FetchRecord(url=url, status=200, verdict=Verdict.OK, text="final-body")
+
+    monkeypatch.setattr("citeproof.fetch.veriscrape.get", fake_get)
+    rec = fetch("https://a.test/")
+    assert rec.text == "final-body"
+    assert rec.url == "https://b.test/"  # the final hop's record is returned
+
+
+def test_too_many_redirects_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    from veriscrape import FetchRecord
+
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: _addrinfo("93.184.216.34"))
+    n = {"i": 0}
+
+    def fake_get(url: str, **kw: object) -> FetchRecord:
+        n["i"] += 1
+        return FetchRecord(url=url, status=302, headers={"location": f"https://hop{n['i']}.test/"})
+
+    monkeypatch.setattr("citeproof.fetch.veriscrape.get", fake_get)
+    with pytest.raises(UnsafeURLError, match="too many redirects"):
+        fetch("https://start.test/")

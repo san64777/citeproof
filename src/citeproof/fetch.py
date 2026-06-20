@@ -2,13 +2,17 @@
 
 Every URL citeproof fetches is planner- or search-generated, so the fetch layer is a classic SSRF
 surface: a crafted link (``http://169.254.169.254/...``, ``http://localhost/admin``,
-``http://10.0.0.1``) could make the agent hit cloud metadata or an internal service. curl_cffi >= 0.15.0
-fixes the redirect-SSRF CVE (CVE-2026-33752); this guard blocks the OTHER half - the INITIAL target -
-by refusing any URL whose host is, or resolves to, an internal / loopback / link-local / reserved
-address, and any non-http(s) scheme.
+``http://10.0.0.1``) could make the agent hit cloud metadata or an internal service. The guard refuses
+any URL whose host is, or resolves to, an internal / loopback / link-local / reserved address, and any
+non-http(s) scheme.
+
+A validated initial URL is not enough: an attacker-controlled public page can answer with a 30x
+redirect to an internal address, and curl_cffi follows redirects by default (the CVE-2026-33752 fix
+restricts redirect PROTOCOLS, not destination IPs). So fetch() disables auto-redirect and follows
+redirects ITSELF, re-running assert_safe_url on every hop, with a hop cap and loop detection.
 
 The actual fetch + trust verdict is veriscrape.get (curl_cffi + the hardened classifier). This module
-only adds the pre-flight safety check and returns veriscrape's FetchRecord unchanged.
+adds the pre-flight + per-hop safety checks and returns veriscrape's FetchRecord for the final hop.
 
 KNOWN LIMIT (follow-up): assert_safe_url resolves the host and checks the result, but veriscrape re-
 resolves at fetch time, so a DNS-rebinding attacker could pass the check then serve an internal IP. The
@@ -19,12 +23,13 @@ from __future__ import annotations
 
 import ipaddress
 import socket
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import veriscrape
 from veriscrape import FetchRecord
 
 _ALLOWED_SCHEMES = frozenset({"http", "https"})
+_MAX_REDIRECTS = 5
 
 
 class UnsafeURLError(ValueError):
@@ -88,11 +93,36 @@ def assert_safe_url(url: str) -> None:
             raise UnsafeURLError(f"{host!r} resolves to internal/reserved address {ip}")
 
 
-def fetch(url: str, *, timeout: float = 20.0, impersonate: str = "chrome") -> FetchRecord:
-    """SSRF-guard `url`, then fetch it and return veriscrape's trust verdict + body (FetchRecord).
+def _location_header(headers: dict[str, str] | None) -> str | None:
+    """The Location header value (case-insensitive), or None."""
+    if not headers:
+        return None
+    for key, value in headers.items():
+        if key.lower() == "location":
+            return value
+    return None
 
-    The caller cites only when `record.ok` (verdict is OK); UNVERIFIED and every block/junk verdict are
-    excluded. Raises UnsafeURLError (before any network call) for an unsafe URL.
+
+def fetch(url: str, *, timeout: float = 20.0, impersonate: str = "chrome") -> FetchRecord:
+    """SSRF-guard `url` AND every redirect hop, then return veriscrape's trust verdict + body.
+
+    Redirects are followed manually (auto-redirect disabled) so a 30x to an internal address is caught:
+    each hop's target is re-validated with assert_safe_url before it is fetched. The caller cites only
+    when `record.ok`. Raises UnsafeURLError for an unsafe initial URL, an unsafe redirect target, a
+    redirect loop, or too many hops (before the offending request is ever made).
     """
     assert_safe_url(url)
-    return veriscrape.get(url, timeout=timeout, impersonate=impersonate)
+    seen = {url}
+    for _ in range(_MAX_REDIRECTS + 1):
+        record = veriscrape.get(url, timeout=timeout, impersonate=impersonate, allow_redirects=False)
+        status = record.status or 0
+        location = _location_header(record.headers) if 300 <= status < 400 else None
+        if not location:
+            return record  # final (non-redirect) response, with veriscrape's verdict
+        target = urljoin(url, location)
+        assert_safe_url(target)  # re-validate EVERY hop - this is what closes the redirect-SSRF gap
+        if target in seen:
+            raise UnsafeURLError(f"redirect loop following {url!r}")
+        seen.add(target)
+        url = target
+    raise UnsafeURLError(f"too many redirects (> {_MAX_REDIRECTS})")
