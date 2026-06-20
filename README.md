@@ -12,6 +12,12 @@ Ask a question, and citeproof fetches sources, throws out the ones it can't veri
 answer where **every cited sentence opens a snapshot with the supporting line highlighted** - or it
 says it couldn't verify the claim. It runs entirely on your machine.
 
+![citeproof: click any cited claim to open the source snapshot with the supporting line highlighted](assets/demo.gif)
+
+*Left: the answer with a verification ledger (cited / unverified / excluded-with-verdict). Right: click
+any cited claim and the exact supporting line is highlighted in the snapshot. The paywalled source is
+excluded, not cited.*
+
 > **Status: working v0.** The verification core is built and validated end to end (M0 binder gate
 > passed; M1 fetch/verify/snapshot spine and M2 local web app complete). It runs today via
 > `python -m citeproof.app`. It is **not yet packaged** for one-command install, and the published
