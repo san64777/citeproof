@@ -208,13 +208,6 @@ class EntailmentBinder:
         if pair.verdict is not Verdict.OK:
             return self._abstain(pair)
 
-        # 1b. A claim that itself opens with an unresolved pronoun/anaphor ("It was the tallest...",
-        #     "They lost...", "She became...") is NOT self-contained - there is no way to know which
-        #     entity it is about, so it can never be safely attributed to a span. Abstain (the
-        #     decontext_failure principle). Ships with the coreference feature it is paired with.
-        if self.coref_context and _has_leading_anaphor(pair.claim):
-            return self._abstain(pair)
-
         # 2. Candidate spans, with char offsets preserved for anchoring. Drop non-prose chunks
         #    (nav lists, references, infobox tables) - an NLI mis-scores them as support.
         candidates = [c for c in candidate_spans(pair.source_text) if _is_citable_prose(c.text)]

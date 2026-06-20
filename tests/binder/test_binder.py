@@ -304,14 +304,3 @@ def test_coreference_context_resolves_a_pronoun_subject_and_cites() -> None:
     on = EntailmentBinder(_CorefFake(), tau_mc=0.5, coref_context=True)  # type: ignore[arg-type]
     out = on.bind(_pair(pid="cf", claim=claim, source_text=source, verdict=Verdict.OK))
     assert out.cited and out.cited_span == bare  # cites, and anchors the candidate sentence only
-
-
-def test_claim_with_leading_pronoun_is_not_self_contained_and_abstains() -> None:
-    # A claim whose OWN subject is an unresolved pronoun can never be safely attributed - abstain even
-    # when the source text would score a perfect entailment (the decontext_failure principle).
-    claim = "It was the tallest building in the world when it opened."
-    span = "It was the tallest building in the world when it opened, at 828 metres."
-    source = f"The tower opened in 2010. {span}"
-    fake = FakeEntailment(scores={(claim, span): 0.99})
-    binder = EntailmentBinder(fake, tau_mc=0.5, coref_context=True)
-    assert binder.bind(_pair(pid="dc", claim=claim, source_text=source, verdict=Verdict.OK)).cited is False
