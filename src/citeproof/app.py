@@ -61,19 +61,31 @@ def create_app(runner: ResearchRunner, store: MemoryReceiptStore) -> FastAPI:
         # Stream progress as newline-delimited JSON: {"type":"progress","data":"..."} lines while the
         # pipeline runs, then one {"type":"result", data: <report>} (or {"type":"error"}). The work is
         # sync and GPU-bound, so it runs in a thread that pushes progress to a queue the generator
-        # drains; the research_lock still serializes it (the tokenizers are not thread-safe).
+        # drains.
+        #
+        # Concurrency cap: acquire the serialize-lock NON-BLOCKING at request time. A query is already
+        # running -> reject immediately with a clean "busy" line instead of queuing the request and
+        # piling up GPU work (the tokenizers are not thread-safe and there is one GPU). The worker
+        # releases the lock when it actually finishes, so a client that disconnects mid-query frees the
+        # slot once that query completes rather than leaving an unbounded backlog.
+        if not research_lock.acquire(blocking=False):
+            def busy() -> Iterator[str]:
+                yield json.dumps({"type": "error",
+                                  "data": "A research query is already running - please wait for it to finish."}) + "\n"
+            return StreamingResponse(busy(), media_type="application/x-ndjson")
+
         events: queue.Queue[tuple[str, object]] = queue.Queue()
         done = object()
 
         def work() -> None:
             try:
-                with research_lock:
-                    report = runner(req.question, req.urls or None,
-                                    lambda m: events.put(("progress", m)))
+                report = runner(req.question, req.urls or None,
+                                lambda m: events.put(("progress", m)))
                 events.put(("result", report.model_dump()))
             except Exception as exc:  # surface a clean error line instead of a dropped stream
                 events.put(("error", f"{type(exc).__name__}: {exc}"))
             finally:
+                research_lock.release()  # free the slot only when the work is actually done
                 events.put(("__done__", done))
 
         threading.Thread(target=work, daemon=True).start()

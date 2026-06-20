@@ -106,3 +106,38 @@ def test_too_many_urls_rejected() -> None:
     client, _ = _client()
     r = client.post("/api/research", json={"question": "a real question", "urls": [f"https://e{i}.test" for i in range(20)]})
     assert r.status_code == 422
+
+
+def test_research_stream_rejects_a_concurrent_query() -> None:
+    # The audit's concurrency-cap fix: while one query holds the slot, a second must be rejected
+    # immediately (not queued), so GPU work cannot pile up.
+    import json as _json
+    import threading
+
+    store = MemoryReceiptStore()
+    started = threading.Event()
+    release = threading.Event()
+
+    def runner(question: str, urls: list[str] | None, on_progress=None) -> ResearchReport:
+        started.set()
+        release.wait(timeout=10)  # hold the slot until the test lets go
+        return ResearchReport(question=question, draft="", claims=[],
+                              sources=[], ledger=Ledger(cited=0, unverified=0, excluded=0))
+
+    client = TestClient(create_app(runner, store))
+
+    def fire_first() -> None:
+        with client.stream("POST", "/api/research/stream", json={"question": "first query", "urls": []}) as r:
+            for _ in r.iter_lines():
+                pass
+
+    t = threading.Thread(target=fire_first, daemon=True)
+    t.start()
+    assert started.wait(timeout=10), "first query never entered the runner (lock not held)"
+    try:
+        r2 = client.post("/api/research/stream", json={"question": "second query", "urls": []})
+        events = [_json.loads(line) for line in r2.text.splitlines() if line.strip()]
+        assert any(e["type"] == "error" and "already running" in e["data"] for e in events), events
+    finally:
+        release.set()
+        t.join(timeout=10)
