@@ -93,6 +93,37 @@ def _content_words(text: str) -> set[str]:
     return {w for w in _WORD_RE.findall(text.lower()) if len(w) > 2 and w not in _STOPWORDS}
 
 
+# Coreference recall: a supporting sentence whose subject is a PRONOUN ("It has been on display at
+# the Louvre since 1797.") under-scores, because a sentence-level NLI cannot resolve the pronoun from
+# the bare sentence (measured: MiniCheck 0.35 vs 0.95+ when the antecedent is present). We re-score
+# such a candidate WITH a short preceding-context window so the antecedent resolves - but only when the
+# candidate ALREADY carries the claim's content words, so the support is in THIS sentence and we are
+# only resolving its subject, never borrowing support from the context (that would be a mis-attribution
+# - we still highlight only the candidate). The overlap gate is what makes that safe.
+_ANAPHOR_RE = re.compile(r"^(it|its|they|their|them|this|these|those|he|she|him|his|her|hers)\b", re.I)
+_COREF_OVERLAP_GATE = 0.30  # fraction of the claim's content words the candidate must itself carry
+_COREF_CONTEXT_CHARS = 320
+
+
+def _has_leading_anaphor(text: str) -> bool:
+    """True if the sentence opens with an unresolved pronoun/anaphor (so its subject is elsewhere)."""
+    return bool(_ANAPHOR_RE.match(text.strip()))
+
+
+def _preceding_context(source_text: str, start: int, chars: int = _COREF_CONTEXT_CHARS) -> str:
+    """The prose just before `start`, so a leading pronoun in the candidate can resolve its antecedent
+    when the entailment model re-scores it. If the window cut into the MIDDLE of a sentence (only when
+    it did not reach the start of the source), drop that partial lead-in - but never discard the whole
+    preceding sentence, which is usually the antecedent itself."""
+    left = max(0, start - chars)
+    ctx = source_text[left:start]
+    if left > 0:  # the window began mid-document, so its first sentence may be truncated - drop it
+        m = re.search(r"[.!?]\s+", ctx)
+        if m:
+            ctx = ctx[m.end():]
+    return ctx.strip()
+
+
 def _prefilter_candidates(claim: str, candidates: list[Span], k: int) -> list[Span]:
     """Keep the top-k candidates by IDF-weighted shared content words with the claim (rarer words
     count more, so 'sunscreen' outweighs 'water'). No-op when k <= 0 or candidates <= k."""
@@ -154,6 +185,8 @@ class EntailmentBinder:
         second_signal: EntailmentModel | None = None,
         tau_db: float = 0.5,
         prefilter_k: int = _PREFILTER_K,
+        coref_context: bool = True,
+        coref_overlap_gate: float = _COREF_OVERLAP_GATE,
     ) -> None:
         if not (0.0 <= tau_mc <= 1.0):
             raise ValueError(f"tau_mc must be in [0, 1], got {tau_mc}")
@@ -165,11 +198,21 @@ class EntailmentBinder:
         self.tau_db = tau_db
         # Cap on candidates scored by the entailment model per bind (the speed lever). <= 0 disables.
         self.prefilter_k = prefilter_k
+        # Resolve a leading pronoun in a candidate by re-scoring with preceding context (see helpers).
+        self.coref_context = coref_context
+        self.coref_overlap_gate = coref_overlap_gate
 
     def bind(self, pair: ClaimSourcePair) -> BinderOutput:
         # 1. CITE-GATE FIRST (non-negotiable): only verdict == OK pages are ever citable. UNVERIFIED
         #    is excluded exactly like BLOCKED. We do not even score candidates for a non-OK page.
         if pair.verdict is not Verdict.OK:
+            return self._abstain(pair)
+
+        # 1b. A claim that itself opens with an unresolved pronoun/anaphor ("It was the tallest...",
+        #     "They lost...", "She became...") is NOT self-contained - there is no way to know which
+        #     entity it is about, so it can never be safely attributed to a span. Abstain (the
+        #     decontext_failure principle). Ships with the coreference feature it is paired with.
+        if self.coref_context and _has_leading_anaphor(pair.claim):
             return self._abstain(pair)
 
         # 2. Candidate spans, with char offsets preserved for anchoring. Drop non-prose chunks
@@ -184,8 +227,21 @@ class EntailmentBinder:
 
         # 3. Score every candidate on BOTH signals and locate it in the source.
         scored: list[_Scored] = []
+        claim_cw = _content_words(pair.claim)
         for cand in candidates:
             e = self.entailment.score(pair.claim, cand.text)
+            # Coreference recall (see _ANAPHOR_RE): a candidate that opens with a pronoun under-scores
+            # because its subject is elsewhere. Only when it ALREADY carries enough of the claim's
+            # content words (the support is in THIS sentence, not the context) do we re-score it with a
+            # short preceding-context window so the pronoun resolves. The overlap gate is the
+            # mis-attribution guard; symbolic_consistency below still independently checks the
+            # candidate alone, so a wrong number/negation in it is still fatal.
+            if (self.coref_context and e < self.tau_mc and claim_cw
+                    and _has_leading_anaphor(cand.text)
+                    and len(claim_cw & _content_words(cand.text)) / len(claim_cw) >= self.coref_overlap_gate):
+                ctx = _preceding_context(pair.source_text, cand.start)
+                if ctx:
+                    e = max(e, self.entailment.score(pair.claim, f"{ctx} {cand.text}"))
             s = symbolic_consistency(pair.claim, cand.text).ok
             anchor = find_anchor(cand.text, pair.source_text, near=cand.start)
             if anchor is None:

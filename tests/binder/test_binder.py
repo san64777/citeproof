@@ -283,3 +283,35 @@ def test_binder_cites_at_least_one_clean_pair_on_seed() -> None:
     binder = EntailmentBinder(FakeEntailment(), tau_mc=0.2)
     report = run(pairs, binder)
     assert report.pooled_cited >= 1
+
+
+def test_coreference_context_resolves_a_pronoun_subject_and_cites() -> None:
+    # A supporting sentence whose subject is a pronoun ("It is the closest planet to the Sun.")
+    # under-scores ALONE, but resolves once the preceding antecedent is supplied. With the coreference
+    # feature on, the binder re-scores it with context and cites - highlighting only the candidate.
+    claim = "Mercury is the closest planet to the Sun."
+    source = "Mercury is the smallest planet in the Solar System. It is the closest planet to the Sun."
+    bare = "It is the closest planet to the Sun."
+
+    class _CorefFake:
+        # low for the bare pronoun sentence; high once the antecedent "Mercury" is in the premise
+        def score(self, claim: str, span: str) -> float:
+            return 0.95 if ("Mercury" in span and "closest" in span) else 0.20
+
+    off = EntailmentBinder(_CorefFake(), tau_mc=0.5, coref_context=False)  # type: ignore[arg-type]
+    assert off.bind(_pair(pid="cf", claim=claim, source_text=source, verdict=Verdict.OK)).cited is False
+
+    on = EntailmentBinder(_CorefFake(), tau_mc=0.5, coref_context=True)  # type: ignore[arg-type]
+    out = on.bind(_pair(pid="cf", claim=claim, source_text=source, verdict=Verdict.OK))
+    assert out.cited and out.cited_span == bare  # cites, and anchors the candidate sentence only
+
+
+def test_claim_with_leading_pronoun_is_not_self_contained_and_abstains() -> None:
+    # A claim whose OWN subject is an unresolved pronoun can never be safely attributed - abstain even
+    # when the source text would score a perfect entailment (the decontext_failure principle).
+    claim = "It was the tallest building in the world when it opened."
+    span = "It was the tallest building in the world when it opened, at 828 metres."
+    source = f"The tower opened in 2010. {span}"
+    fake = FakeEntailment(scores={(claim, span): 0.99})
+    binder = EntailmentBinder(fake, tau_mc=0.5, coref_context=True)
+    assert binder.bind(_pair(pid="dc", claim=claim, source_text=source, verdict=Verdict.OK)).cited is False
