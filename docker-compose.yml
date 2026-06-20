@@ -1,0 +1,59 @@
+# citeproof - one-command run. Two services: the local Ollama writer model and the citeproof app
+# (fetch + verify + binder + receipts). Both use the GPU via the NVIDIA Container Toolkit.
+#
+#   docker compose up --build      # first run builds the image + downloads models (large, one-time)
+#   open http://localhost:8417
+#
+# First startup pulls qwen3:8b (~5 GB) into Ollama and the binder weights (~2 GB) into the hf-models
+# volume - watch the logs; a query works once "ollama-init" has finished pulling.
+services:
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-models:/root/.ollama
+    environment:
+      - OLLAMA_MAX_LOADED_MODELS=1
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  # one-shot: pull the writer model into the ollama volume, then exit.
+  ollama-init:
+    image: ollama/ollama:latest
+    depends_on:
+      - ollama
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    entrypoint: ["/bin/sh", "-c", "sleep 4 && ollama pull qwen3:8b"]
+    restart: "no"
+
+  citeproof:
+    build: .
+    depends_on:
+      - ollama
+    ports:
+      - "8417:8417"
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+      - CITEPROOF_HOST=0.0.0.0
+      - CITEPROOF_MODEL=qwen3:8b
+      # - SEARXNG_URL=http://searxng:8080   # optional: fully-local whole-web search
+    volumes:
+      - hf-models:/models/hf
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  ollama-models:
+  hf-models:

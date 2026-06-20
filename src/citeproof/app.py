@@ -151,7 +151,8 @@ def main() -> None:  # pragma: no cover - the production entry point
     import uvicorn
 
     store = MemoryReceiptStore()
-    app = create_app(build_production_runner(store), store)
+    model = os.environ.get("CITEPROOF_MODEL", "qwen3:8b")  # swap the local writer without code edits
+    app = create_app(build_production_runner(store, model=model), store)
     # localhost-only by DEFAULT: this is a local product. Binding wider is an EXPLICIT opt-in via
     # CITEPROOF_HOST (e.g. 0.0.0.0 to reach it from the Windows host across the WSL2 boundary, or
     # from another machine) - which also exposes it to the local network, so it is never the default.

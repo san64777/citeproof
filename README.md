@@ -62,6 +62,24 @@ highlighted line. That is the whole product: provable, not persuasive.
 citeproof runs locally and uses local models. A CUDA GPU is recommended (it was built and validated
 on an RTX 3060, 12 GB); it will run CPU-only but slowly.
 
+### Option A: Docker (recommended)
+
+One command brings up the writer model (Ollama) and the app, both on the GPU:
+
+```bash
+git clone https://github.com/san64777/citeproof
+cd citeproof
+docker compose up --build
+```
+
+Then open http://localhost:8417. The first run is large and one-time: it builds the image, pulls
+`qwen3:8b` (~5 GB) into Ollama, and downloads the binder weights (~2 GB) into a volume - watch the
+logs; a query works once the `ollama-init` step finishes pulling. GPU access needs the
+[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+(`docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi` should list your GPU).
+
+### Option B: from source
+
 **1. Prerequisites**
 
 - Python 3.12+ and [uv](https://docs.astral.sh/uv/)

@@ -12,6 +12,7 @@ the binder can check. FakeBrain is the deterministic test stand-in (same Protoco
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Protocol
 
@@ -56,7 +57,7 @@ _MAX_SOURCE_CHARS = 4000  # per source; keeps the prompt inside a small local mo
 class OllamaBrain:
     """Draft writer on the local Ollama daemon. Lazy import; model swappable by constructor."""
 
-    def __init__(self, model: str = "qwen3:8b", host: str = "http://localhost:11434") -> None:
+    def __init__(self, model: str = "qwen3:8b", host: str | None = None) -> None:
         try:
             import ollama
         except ImportError as exc:  # pragma: no cover
@@ -64,6 +65,9 @@ class OllamaBrain:
                 "OllamaBrain requires the optional 'binder' dependencies (pip install ollama / "
                 "uv sync --extra binder)"
             ) from exc
+        # An explicit host wins; otherwise honor OLLAMA_HOST (so the daemon can be a separate
+        # container, e.g. http://ollama:11434 under docker compose); else the local daemon.
+        host = host or os.environ.get("OLLAMA_HOST") or "http://localhost:11434"
         self._client = ollama.Client(host=host)
         self._model = model
 
