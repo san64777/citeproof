@@ -65,6 +65,36 @@ def test_block_page_is_excluded_and_ok_page_is_cited(monkeypatch: pytest.MonkeyP
     assert excluded[0].verdict == "LOGIN_WALL"
 
 
+def test_verified_but_unanchorable_span_is_honestly_unverified(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The binder verifies a span, but it cannot be re-located in the snapshot to anchor a receipt.
+    # We never mis-highlight, so the claim stays unverified - but the reason must say it was the
+    # ANCHORING that failed (the claim WAS supported), not the generic "no source passed the gates".
+    from citeproof.eval.models import BinderOutput
+
+    class _CitesUnanchorable:
+        def bind(self, pair: object) -> BinderOutput:
+            return BinderOutput(
+                pair_id=pair.id, cited=True, abstained=False,  # type: ignore[attr-defined]
+                cited_span="a span that appears nowhere in the visible snapshot text zqzq",
+                cited_span_start=0, source_url=pair.source_url,  # type: ignore[attr-defined]
+                entailment_prob=0.99, symbolic_ok=True,
+            )
+
+    _patch_fetch(monkeypatch, {"ok.test": FetchRecord(url="https://ok.test/a", verdict=Verdict.OK, status=200, text=_ARTICLE)})
+    provider = _Provider([SearchResult(title="a", url="https://ok.test/a")])
+    rep = run_research(
+        "How much power does the Alpha solar farm produce?",
+        binder=_CitesUnanchorable(),  # type: ignore[arg-type]
+        brain=FakeBrain("The Alpha solar farm in Nevada produces 690 megawatts of power."),
+        provider=provider, store=MemoryReceiptStore(), out_dir=tmp_path,
+    )
+    assert rep.ledger.cited == 0
+    unverified = [c for c in rep.claims if c.status == "unverified"]
+    assert unverified and any("could not be re-located" in (c.reason or "") for c in unverified)
+
+
 def test_hallucinated_claim_stays_unverified_never_falsely_cited(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -240,6 +240,7 @@ def run_research(
         ranked = sorted(ok, key=lambda s: _overlap(claim, s.extracted), reverse=True)
         report = ClaimReport(claim=claim, status="unverified",
                              reason="no source passed the verification gates for this claim")
+        verified_but_unanchored = False  # the binder backed the claim, but no receipt could be anchored
         for src in ranked[:3]:
             pair = ClaimSourcePair(
                 id=f"q{ci}", bucket=Bucket.CLEAN_ENTAILED, fold=Fold.TEST, claim=claim,
@@ -254,7 +255,11 @@ def run_research(
             near = proportional_near(out.cited_span_start, len(src.extracted), len(src.visible))
             anchor = anchor_quote(out.cited_span, src.visible, near=near)
             if anchor is None:
-                continue  # never mis-highlight: try the next source or stay unverified
+                # The binder verified a span, but it could not be re-located in the snapshot the
+                # receipt renders. We never mis-highlight, so try the next source; if all fail, say
+                # so honestly (this is a recall loss in ANCHORING, not a failure to verify).
+                verified_but_unanchored = True
+                continue
             receipt = Receipt(
                 claim=claim, url=src.url, verdict="OK", tactic=src.tactic,
                 artifact_path=src.artifact_path, artifact_sha256=src.artifact_sha256,
@@ -265,6 +270,13 @@ def run_research(
             rid = store.put(render_receipt_html(src.artifact_html, receipt))
             report = ClaimReport(claim=claim, status="cited", receipt_id=rid, url=src.url)
             break
+        else:
+            if verified_but_unanchored:
+                report = ClaimReport(
+                    claim=claim, status="unverified",
+                    reason="a source supports this claim, but the exact supporting line could not be "
+                           "re-located in the snapshot to anchor a receipt",
+                )
         claims.append(report)
 
     cited = sum(1 for c in claims if c.status == "cited")
