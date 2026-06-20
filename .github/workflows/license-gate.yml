@@ -1,0 +1,21 @@
+name: license-gate
+on: [push, pull_request]
+jobs:
+  licenses:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.2.0
+      - run: uv python install 3.12
+      # Verify the real runtime + dev install is zero viral copyleft, from commit #1.
+      # Fails on any GPL/AGPL/LGPL/SSPL dependency. SingleFile (AGPL) is a CLI subprocess,
+      # never in the import tree, so it never reaches this gate.
+      # tld is excluded BY NAME, not waved through: it is "MPL-1.1 OR GPL-2.0-only OR
+      # LGPL-2.1-or-later" and with an OR expression the consumer elects the license - we elect
+      # MPL-1.1 (weak file-level copyleft, permitted; certifi is already MPL). The substring match
+      # would trip on the GPL option we did not elect. tld is a hard dep of courlan (trafilatura).
+      # If tld ever drops the MPL option, remove this exclusion and the dependency.
+      # Include the shipped `app` extra (FastAPI/uvicorn) so the web-app deps are license-verified.
+      # binder (torch) / render (playwright) are heavy opt-in extras, license-checked when they ship.
+      - run: uv sync --extra app
+      - run: uv run pip-licenses --fail-on='GPL;AGPL;LGPL;SSPL' --partial-match --ignore-packages tld

@@ -1,0 +1,123 @@
+[project]
+name = "citeproof"
+version = "0.1.0"
+description = "Local Deep Research that won't cite a source it can't verify is real: every claim is grounded to a verified-OK page span and links to a highlighted receipt, or it abstains."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { file = "LICENSE" }
+authors = [{ name = "Sanjay Chauhan", email = "san64777@gmail.com" }]
+keywords = [
+    "deep-research", "research-agent", "citations", "verification", "rag",
+    "local-llm", "ollama", "fact-checking", "entailment", "provenance",
+    "self-hosted", "offline",
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Text Processing :: General",
+]
+# Runtime deps grow as M0 lands (MiniCheck/embeddings/sqlite-vec wired during the binder spike).
+# Pinned now: the verdict gate (veriscrape >= 0.2.0 has the hardened positive-OK detector; 0.1.0 could
+# never emit OK) and the SSRF-fixed fetch core (curl_cffi >= 0.15.0).
+dependencies = [
+    "veriscrape>=0.2.0",
+    "curl_cffi>=0.15.0",
+    "scipy>=1.11",
+    "pydantic>=2.7",
+    # Main-content extraction for the M1 spine. License VERIFIED 2026-06-10 via PyPI
+    # license_expression: trafilatura 2.1.0 is Apache-2.0 (it relicensed off GPL) - gate-clean.
+    "trafilatura>=2.1.0",
+]
+
+[project.optional-dependencies]
+# The binder extra carries the HEAVY entailment model deps (transformers + torch). The core binder
+# (symbolic check + binder logic + FakeEntailment) needs NONE of these; MiniCheckEntailment imports
+# them lazily. Default `uv sync` (no extras) stays light, so CI and the binder unit tests (which use
+# FakeEntailment only) never pull these in. Install the model deps with:
+#   uv sync --extra binder
+#
+# VERIFIED (2026-06-08): there is NO `minicheck` / `MiniCheck` distribution on PyPI. The MiniCheck
+# package is installed from source, e.g.
+#   uv pip install "git+https://github.com/Liyan06/MiniCheck.git"
+# (MiniCheck-RoBERTa-Large checkpoint is MIT). A git URL is intentionally NOT listed as a hard
+# requirement here because a non-PyPI requirement breaks uv's universal lock and would make the
+# DEFAULT `uv sync` fail. So `minicheck` is a documented install step, not a resolved dep.
+# TODO(confirm at wiring time): pin the exact transformers/torch versions the checkpoint needs and
+# the exact model id (the `lytang/MiniCheck-RoBERTa-Large` HF id used in entailment.py) - do NOT
+# trust memory; verify against current MiniCheck docs / the HF model card before relying.
+binder = [
+    # LIVE-VERIFIED (wired + scored on an RTX 3060): MiniCheck-RoBERTa-Large via transformers 5.x +
+    # torch CUDA. transformers 5.x routes MiniCheck's device_map through `accelerate`, so accelerate
+    # is REQUIRED (without it, model load raises "Using a device_map ... requires accelerate").
+    "transformers>=4.40",
+    "torch>=2.2",
+    "accelerate>=0.26",
+    # The RETRIEVE embedder (retrieve.py SentenceTransformerEmbedder, lazy-imported). verified-
+    # stack.md names Qwen3-Embedding-0.6B as the default embedder.
+    # TODO(VERIFY at wiring time, do NOT trust memory): confirm the exact HF model id
+    # ("Qwen/Qwen3-Embedding-0.6B") and the sentence-transformers loading recipe against the
+    # current HF model card before relying - some Qwen3 embedding checkpoints need a query/document
+    # prompt template, not a bare encode().
+    "sentence-transformers>=3.0",
+    # The DECOMPOSE client (decompose.py OllamaDecomposer, lazy-imported). The VeriScore-style
+    # decontextualizer runs against a local Ollama model (the project default is Qwen3-8B via
+    # Ollama). The lightweight `ollama` Python client talks to the local daemon over HTTP.
+    # TODO(VERIFY at wiring time, do NOT trust memory): confirm the exact `ollama` client version
+    # AND the local model id / VeriScore decontextualization prompt against current docs before
+    # relying - some Ollama client versions changed the chat/generate API shape. The OllamaDecomposer
+    # body is an un-wired stub until then (see decompose.py).
+    "ollama>=0.3",
+    # minicheck: install from git (see note above); NOT a PyPI package, so not pinned here. The
+    # MiniCheckEntailment adapter fetches the nltk 'punkt_tab' resource lazily on first construction
+    # (newer nltk ships 'punkt' only, which MiniCheck's tokenizer no longer finds).
+]
+# The render extra carries Playwright (a ~50MB package + a Chromium download via
+# `playwright install chromium`). Used ONLY for the EMPTY_SHELL escalation: when veriscrape says a
+# page is a JS app skeleton, we render it once in headless Chromium and re-classify the rendered DOM.
+# Rendering, not circumvention: a BLOCKED/challenge verdict is never escalated. Lazy-imported, so the
+# default install and CI never pull it.
+render = [
+    "playwright>=1.49",
+]
+# The app extra is the M2 local web app (FastAPI MIT, uvicorn BSD-3 - license-gate clean).
+app = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    # Keyless whole-web search (MIT). A metasearch library, NOT in our verification path - the
+    # gate still excludes whatever it surfaces. License gate clean (MIT).
+    "ddgs>=9.0",
+]
+
+[project.scripts]
+# `citeproof` launches the local web app (needs the `app` + `binder` extras, MiniCheck, and Ollama).
+citeproof = "citeproof.app:main"
+
+[project.urls]
+Homepage = "https://github.com/san64777/citeproof"
+Repository = "https://github.com/san64777/citeproof"
+Issues = "https://github.com/san64777/citeproof/issues"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11", "pip-licenses>=5", "httpx>=0.27"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/citeproof"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 110
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true

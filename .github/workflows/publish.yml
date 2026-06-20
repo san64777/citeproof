@@ -1,0 +1,18 @@
+name: publish
+on:
+  release:
+    types: [published]
+
+# Publishes to PyPI via Trusted Publishing (OIDC). No API token or secret is stored.
+# One-time PyPI setup: add this repo as a trusted publisher for the 'citeproof' project
+# (PyPI project settings -> Publishing -> add a GitHub publisher, workflow 'publish.yml').
+jobs:
+  pypi-publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write          # required for PyPI Trusted Publishing
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.2.0
+      - run: uv build
+      - uses: pypa/gh-action-pypi-publish@release/v1

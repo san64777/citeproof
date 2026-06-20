@@ -1,0 +1,10 @@
+citeproof
+Copyright 2026 Sanjay Chauhan
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+citeproof invokes SingleFile (single-file-cli, AGPL-3.0) only as an external
+command-line subprocess for page snapshots. SingleFile is not modified, linked,
+or imported into this project's source tree, and is not redistributed with
+citeproof; install it separately. This keeps citeproof's distributed code
+Apache-2.0 and free of viral copyleft.

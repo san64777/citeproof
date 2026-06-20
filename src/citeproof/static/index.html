@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>citeproof</title>
+<style>
+  :root { --bg:#0b1220; --panel:#121c2e; --line:#26334a; --ink:#e6edf6; --dim:#8aa0bd;
+          --ok:#2dd4bf; --warn:#fbbf24; --bad:#f87171; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.55 system-ui, sans-serif; background:var(--bg); color:var(--ink);
+         height:100vh; display:flex; flex-direction:column; }
+  header { padding:12px 20px; border-bottom:1px solid var(--line); display:flex; gap:14px; align-items:baseline; }
+  header h1 { font-size:18px; margin:0; letter-spacing:.5px; }
+  header .tag { color:var(--dim); font-size:13px; }
+  .ask { padding:14px 20px; border-bottom:1px solid var(--line); display:flex; flex-direction:column; gap:8px; }
+  .ask textarea, .ask input { width:100%; background:var(--panel); color:var(--ink); border:1px solid var(--line);
+         border-radius:8px; padding:10px; font:inherit; resize:vertical; }
+  .ask .row { display:flex; gap:10px; align-items:center; }
+  button { background:var(--ok); color:#06241f; border:0; border-radius:8px; padding:10px 18px; font-weight:700; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  .split { flex:1; display:flex; min-height:0; }
+  .left { width:46%; overflow:auto; padding:18px 20px; border-right:1px solid var(--line); }
+  .right { flex:1; display:flex; flex-direction:column; }
+  .right .rhead { padding:8px 14px; border-bottom:1px solid var(--line); color:var(--dim); font-size:13px; }
+  iframe { flex:1; border:0; background:#fff; }
+  .ledger { display:flex; gap:10px; margin-bottom:14px; }
+  .pill { padding:5px 12px; border-radius:999px; font-size:13px; font-weight:700; }
+  .pill.c { background:rgba(45,212,191,.16); color:var(--ok); }
+  .pill.u { background:rgba(251,191,36,.16); color:var(--warn); }
+  .pill.x { background:rgba(248,113,113,.16); color:var(--bad); }
+  .claim { padding:10px 12px; border:1px solid var(--line); border-radius:8px; margin-bottom:8px; }
+  .claim.cited { border-left:3px solid var(--ok); }
+  .claim.unverified { border-left:3px solid var(--warn); }
+  .claim .meta { font-size:12px; color:var(--dim); margin-top:5px; }
+  .claim a { color:var(--ok); cursor:pointer; text-decoration:underline; }
+  h3 { color:var(--dim); font-size:12px; text-transform:uppercase; letter-spacing:.6px; margin:18px 0 8px; }
+  .src { font-size:13px; padding:6px 0; border-bottom:1px solid var(--line); }
+  .src .v { font-weight:700; font-size:11px; padding:2px 7px; border-radius:5px; margin-right:8px; }
+  .src .v.ok { background:rgba(45,212,191,.16); color:var(--ok); }
+  .src .v.no { background:rgba(248,113,113,.16); color:var(--bad); }
+  .src .u { color:var(--dim); word-break:break-all; }
+  .empty { color:var(--dim); padding:30px 0; text-align:center; }
+</style>
+</head>
+<body>
+<header><h1>citeproof</h1><span class="tag">won't cite a source it can't verify is real &middot; local</span></header>
+<div class="ask">
+  <textarea id="q" rows="2" placeholder="Ask a research question..."></textarea>
+  <input id="urls" placeholder="(optional) paste source URLs, comma or newline separated - try mixing in a paywalled or login-walled page">
+  <div class="row"><button id="go">Research</button><span id="status" class="tag"></span></div>
+</div>
+<div class="split">
+  <div class="left"><div id="report" class="empty">Ask a question to begin. Every claim will be cited with a click-to-verify receipt, or shown as unverified. Excluded sources are listed with their verdict.</div></div>
+  <div class="right">
+    <div class="rhead" id="rhead">receipt viewer</div>
+    <iframe id="viewer" sandbox="allow-scripts" title="receipt"></iframe>
+  </div>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+function esc(s){ return (s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+async function research(){
+  const q = $('#q').value.trim(); if(!q) return;
+  const urls = $('#urls').value.split(/[\n,]+/).map(s=>s.trim()).filter(Boolean);
+  $('#go').disabled = true;
+  const t0 = Date.now();
+  let phase = 'Starting...';
+  const tick = setInterval(() => { $('#status').textContent = phase + '  (' + ((Date.now()-t0)/1000|0) + 's)'; }, 250);
+  $('#report').innerHTML = '<div class="empty">working...</div>';
+  try {
+    const res = await fetch('/api/research/stream', {method:'POST', headers:{'content-type':'application/json'},
+      body: JSON.stringify({question:q, urls})});
+    if(!res.ok){ throw new Error('HTTP '+res.status); }
+    // read the newline-delimited JSON stream: progress lines, then one result (or error)
+    const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
+    let result = null, errMsg = null;
+    for(;;){
+      const {value, done} = await reader.read(); if(done) break;
+      buf += dec.decode(value, {stream:true});
+      let nl; while((nl = buf.indexOf('\n')) >= 0){
+        const line = buf.slice(0, nl).trim(); buf = buf.slice(nl+1);
+        if(!line) continue;
+        const ev = JSON.parse(line);
+        if(ev.type === 'progress'){ phase = ev.data; $('#report').innerHTML = '<div class="empty">'+esc(ev.data)+'</div>'; }
+        else if(ev.type === 'result'){ result = ev.data; }
+        else if(ev.type === 'error'){ errMsg = ev.data; }
+      }
+    }
+    if(errMsg) throw new Error(errMsg);
+    if(result) render(result);
+  } catch(e){ $('#report').innerHTML = '<div class="empty">error: '+esc(e.message)+'</div>'; }
+  finally { clearInterval(tick); $('#go').disabled = false; $('#status').textContent = ''; }
+}
+
+function render(r){
+  const L = r.ledger;
+  let h = `<div class="ledger">
+    <span class="pill c">${L.cited} cited</span>
+    <span class="pill u">${L.unverified} unverified</span>
+    <span class="pill x">${L.excluded} excluded</span></div>`;
+  if(!r.claims.length){
+    if(r.draft && r.draft.trim()){ h += `<div class="claim unverified"><div>${esc(r.draft)}</div><div class="meta">the sources did not answer the question - nothing was cited</div></div>`; }
+    else { h += `<div class="empty">No verified-OK sources, so nothing was drafted. See excluded sources below.</div>`; }
+  }
+  for(const c of r.claims){
+    h += `<div class="claim ${c.status}"><div>${esc(c.claim)}</div>`;
+    if(c.status==='cited'){ h += `<div class="meta">verified against <a data-rid="${c.receipt_id}" data-url="${esc(c.url)}">${esc(c.url)}</a> &middot; click to open the highlighted receipt</div>`; }
+    else { h += `<div class="meta">unverified: ${esc(c.reason||'no source supported this claim')}</div>`; }
+    h += `</div>`;
+  }
+  h += `<h3>Sources</h3>`;
+  for(const s of r.sources){
+    const ok = s.status==='ok';
+    h += `<div class="src"><span class="v ${ok?'ok':'no'}">${esc(s.verdict)}</span><span class="u">${esc(s.url)}</span>${ok?'':' &middot; '+esc(s.reason||s.status)}</div>`;
+  }
+  $('#report').innerHTML = h;
+  document.querySelectorAll('.claim a[data-rid]').forEach(a => a.addEventListener('click', () => {
+    $('#viewer').src = '/receipt/' + a.dataset.rid;
+    $('#rhead').textContent = 'receipt: ' + a.dataset.url;
+  }));
+}
+$('#go').addEventListener('click', research);
+$('#q').addEventListener('keydown', e => { if(e.key==='Enter' && (e.metaKey||e.ctrlKey)) research(); });
+</script>
+</body>
+</html>

@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.playwright-mcp/
+
+# Model weights / downloaded checkpoints (never commit - large + redistribution surface)
+ckpts/
+*.safetensors
+*.bin
+
+# Virtualenv (uv manages .venv; uv.lock IS committed for reproducibility)
+.venv/
+venv/
+.env
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Kept LOCAL only: strategy, internal process, project rules (never committed,
+# so public history reads as the author's own - same posture as veriscrape).
+# The PUBLIC face is README.md + LICENSE + NOTICE (+ src/tests when they exist).
+research/
+.claude/
+CLAUDE.md
+PLAN.md
+BUILD-PLAYBOOK.md
+docs/
+
+# M0 labeling: the labeler-supplied junk URL list stays local (the example is committed)
+eval/m0/labeling/junk_urls.txt
+
+# Internal eval apparatus (pre-registration, labeling kit, pairs, gate process) - decisions/process
+# stay local like .claude/memory; the public repo is README + code for users (veriscrape convention).
+# Anchored to the repo root so it does NOT catch the package's src/citeproof/eval/ code + fixtures.
+/eval/
+
+# Stray non-repo asset (personal portfolio screenshot) - never commit
+view-hero.jpeg

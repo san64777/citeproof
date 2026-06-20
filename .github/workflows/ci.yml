@@ -1,0 +1,16 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.2.0
+      - run: uv python install 3.12
+      # The `app` extra (FastAPI/uvicorn, both permissive + light) is synced so the M2 web-app tests
+      # run in CI. The binder (torch) and render (playwright) extras stay OUT: those tests lazy-skip
+      # when their heavy deps are absent, keeping CI fast.
+      - run: uv sync --extra app
+      - run: uv run ruff check src tests
+      - run: uv run mypy src
+      - run: uv run pytest -v
