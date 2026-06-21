@@ -227,3 +227,29 @@ def test_ollama_brain_disables_thinking_by_default(monkeypatch: pytest.MonkeyPat
     assert calls["think"] is False
     assert out == "A fact. Another fact."
     assert OllamaBrain(think=True)  # the opt-in path still constructs
+
+
+def test_ollama_brain_warm_loads_resident_and_swallows_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    ollama = pytest.importorskip("ollama")
+    from citeproof.brain import OllamaBrain
+
+    calls: dict[str, object] = {}
+
+    class _FakeClient:
+        def __init__(self, host: object = None) -> None: ...
+        def chat(self, **kw: object) -> object:
+            calls.update(kw)
+            return SimpleNamespace(message=SimpleNamespace(content="ok"))
+
+    monkeypatch.setattr(ollama, "Client", _FakeClient)
+    OllamaBrain().warm()
+    assert calls["keep_alive"] == -1 and calls["think"] is False  # loads + keeps resident, no thinking
+
+    class _BoomClient(_FakeClient):
+        def chat(self, **kw: object) -> object:
+            raise RuntimeError("ollama down")
+
+    monkeypatch.setattr(ollama, "Client", _BoomClient)
+    OllamaBrain().warm()  # must NOT raise (Ollama may not be up at startup)

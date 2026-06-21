@@ -133,6 +133,9 @@ def build_production_runner(
         MiniCheckEntailment(), tau_mc=tau_mc, second_signal=DebertaMnliEntailment(), tau_db=tau_db
     )
     brain = OllamaBrain(model=model)
+    # Warm the writer model into VRAM in the background (the binder models already load above), so the
+    # FIRST query is not slow on a cold model load. Best-effort: if Ollama is not up yet, no harm done.
+    threading.Thread(target=brain.warm, daemon=True).start()
     provider = default_provider()
     out_dir = Path(tempfile.mkdtemp(prefix="citeproof-"))
 

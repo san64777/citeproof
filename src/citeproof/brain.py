@@ -95,6 +95,19 @@ class OllamaBrain:
         content = resp.message.content if hasattr(resp, "message") else resp["message"]["content"]
         return _strip_reasoning(content or "").strip()
 
+    def warm(self) -> None:
+        """Best-effort: load the model into VRAM and keep it resident (keep_alive=-1), so the FIRST
+        real draft does not pay the cold model load. Swallows every error - if Ollama is not up yet,
+        the first query simply loads the model as before. Safe to call from a background thread."""
+        try:
+            self._client.chat(
+                model=self._model,
+                messages=[{"role": "user", "content": "ready"}],
+                think=False, keep_alive=-1, options={"num_predict": 1},
+            )
+        except Exception:
+            pass
+
 
 def _strip_reasoning(text: str) -> str:
     """Qwen3 emits <think>...</think> reasoning blocks; the draft is what comes after. A truncated
