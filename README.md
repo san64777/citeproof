@@ -19,9 +19,9 @@ any cited claim and the exact supporting line is highlighted in the snapshot. Th
 excluded, not cited.*
 
 > **Status: working v0.** The verification core is built and validated end to end (M0 binder gate
-> passed; M1 fetch/verify/snapshot spine and M2 local web app complete). It runs today via
-> `python -m citeproof.app`. It is **not yet packaged** for one-command install, and the published
-> launch (a one-binary build) is still ahead. See [Status](#status) and [RESULTS.md](RESULTS.md).
+> passed; M1 fetch/verify/snapshot spine and M2 local web app complete). Run it with one command via
+> `docker compose up`, or from source with `python -m citeproof.app`. A single-binary build is still
+> ahead. See [Status](#status) and [RESULTS.md](RESULTS.md).
 
 ## The idea
 
@@ -55,7 +55,8 @@ highlighted line. That is the whole product: provable, not persuasive.
 - Sources it couldn't verify are listed **with their verdict** (paywall, login wall, JS shell, ...),
   excluded honestly instead of cited.
 - Search the **whole web** (keyless DuckDuckGo + Wikipedia, or a self-hosted SearXNG), or paste your
-  own URLs.
+  own URLs. Results are ranked by relevance to the question (rank-fusion + snippet scoring) so the
+  sources it fetches are the on-topic, authoritative ones, not whatever ranked first.
 
 ## Quickstart
 
@@ -111,13 +112,17 @@ uv run python -m citeproof.app        # serves http://127.0.0.1:8417
 ```
 
 Open http://127.0.0.1:8417, ask a question (optionally paste source URLs), and click any cited claim
-to open its highlighted receipt. A query takes roughly 30 seconds on a GPU (local model + verifier).
+to open its highlighted receipt. A query takes roughly 10 to 20 seconds on a GPU (search, fetch,
+draft, and verify); the writer model is warmed at startup, so the first query is not slow on a cold
+model load.
 
 Optional environment variables:
 
 | variable | effect |
 |---|---|
 | `CITEPROOF_HOST` | bind address (default `127.0.0.1`; set `0.0.0.0` to reach it across a WSL2/LAN boundary) |
+| `CITEPROOF_MODEL` | the Ollama writer model (default `qwen3:8b`; any Ollama model) |
+| `OLLAMA_HOST` | where the Ollama daemon lives (default `http://localhost:11434`; e.g. a separate container) |
 | `SEARXNG_URL` | use a self-hosted [SearXNG](https://github.com/searxng/searxng) instance for fully-local whole-web search |
 | `CITEPROOF_SEARCH=wikipedia` | encyclopedic-only search (most reliable, zero web noise) |
 | `OLLAMA_MAX_LOADED_MODELS=1` | keep the GPU from thrashing (recommended) |
@@ -132,7 +137,8 @@ Optional environment variables:
    is extracted from *that* artifact (re-hashed before every read), so the text verified, the line
    highlighted, and the page you open are guaranteed identical.
 4. **Draft.** A local model (Ollama, default qwen3:8b, swappable) writes short, source-grounded
-   sentences from the verified pages only.
+   sentences from the verified pages only - straight to the facts, no chain-of-thought (the binder
+   verifies every sentence regardless, so reasoning would only cost latency).
 5. **Bind.** Each sentence is checked against candidate spans with a fine-tuned entailment model
    (MiniCheck-RoBERTa-Large), a different-lineage second-signal NLI (DeBERTa-v3), and an orthogonal
    symbolic check, then attached to a verbatim span or left unverified. Abstain over guess.
