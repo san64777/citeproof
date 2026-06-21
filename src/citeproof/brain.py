@@ -50,7 +50,8 @@ _SYSTEM = (
     # fuses facts from several sentences cannot be verified and is dropped. Hug the source.
     "Make each sentence correspond closely to ONE sentence in the sources: stay near the source's "
     "own wording and do NOT combine facts from different sentences into one sentence. "
-    "No speculation, no hedging, no meta-commentary, no markdown, no citations or "
+    "No speculation, no hedging, no meta-commentary. Write PLAIN TEXT sentences only: no markdown, no "
+    "bullet points, no numbered lists, no headings, no bold, no tables. No citations or "
     f"source numbers (verification is attached separately). If the sources do not answer the "
     f"question, say only: {ABSTENTION_SENTINEL}."
 )
@@ -98,7 +99,7 @@ class OllamaBrain:
             resp = self._client.chat(model=self._model, messages=messages, think=self._think,
                                      options={"temperature": 0.0})
             content = resp.message.content if hasattr(resp, "message") else resp["message"]["content"]
-            return _strip_reasoning(content or "").strip()
+            return _strip_markdown(_strip_reasoning(content or ""))
         # Stream: forward each token to on_token (for live UI feedback) while accumulating the full
         # draft to return. With think off there is no reasoning in the content stream; _strip_reasoning
         # on the joined text is a belt-and-suspenders guard.
@@ -109,7 +110,7 @@ class OllamaBrain:
             if delta:
                 parts.append(delta)
                 on_token(delta)
-        return _strip_reasoning("".join(parts)).strip()
+        return _strip_markdown(_strip_reasoning("".join(parts)))
 
     def warm(self) -> None:
         """Best-effort: load the model into VRAM and keep it resident (keep_alive=-1), so the FIRST
@@ -132,6 +133,33 @@ def _strip_reasoning(text: str) -> str:
     """
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
     return re.sub(r"<think>.*$", "", text, flags=re.DOTALL)
+
+
+_MD_BOLD = re.compile(r"\*\*(.+?)\*\*|__(.+?)__")
+_MD_BULLET = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
+
+
+def _strip_markdown(text: str) -> str:
+    """The draft must be plain prose: the decomposer splits it into sentence-claims and the binder
+    verifies each one. A small local model sometimes ignores the no-markdown instruction on list-y
+    questions ("how does X work?") and emits headings, bullets, bold, and tables. Left in, the
+    decomposer turns "### Summary Table" and "| Vaccine | ... |" rows into bogus claims that then get
+    bound and mis-attributed. So drop structural lines (headings, table rows, dividers) and strip the
+    bullet markers and inline emphasis, leaving plain sentences. A no-op on prose that is already
+    clean (the common case).
+    """
+    kept: list[str] = []
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):                  # blank or heading
+            continue
+        if s.startswith("|") or s.count("|") >= 2:       # table row / separator
+            continue
+        if set(s) <= set("-*_= "):                       # horizontal rule / divider line
+            continue
+        kept.append(_MD_BULLET.sub("", s))               # strip a leading list marker
+    out = _MD_BOLD.sub(lambda m: m.group(1) or m.group(2), "\n".join(kept))  # unwrap **bold**
+    return out.replace("`", "").strip()
 
 
 class FakeBrain:

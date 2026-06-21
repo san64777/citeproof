@@ -253,3 +253,17 @@ def test_ollama_brain_warm_loads_resident_and_swallows_errors(monkeypatch: pytes
 
     monkeypatch.setattr(ollama, "Client", _BoomClient)
     OllamaBrain().warm()  # must NOT raise (Ollama may not be up at startup)
+
+
+def test_strip_markdown_normalizes_a_list_y_draft_to_prose() -> None:
+    from citeproof.brain import _strip_markdown
+
+    md = ("### Key vaccines\n- **Pfizer**: approved in 2020.\n\n---\n\n| Vaccine | Type |\n"
+          "|--|--|\n| Pfizer | mRNA |\n\nmRNA is wrapped in **lipid nanoparticles** to protect it.")
+    out = _strip_markdown(md)
+    assert "###" not in out and "**" not in out and "|" not in out and "---" not in out
+    assert "Pfizer: approved in 2020." in out
+    assert "mRNA is wrapped in lipid nanoparticles to protect it." in out
+    # a clean prose draft is passed through unchanged (no-op on the common case)
+    plain = "The Eiffel Tower is made of wrought iron. It is 330 metres tall."
+    assert _strip_markdown(plain) == plain
