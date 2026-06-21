@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import math
 import re
-from collections import Counter
 from dataclasses import dataclass
 
 from veriscrape import Verdict
@@ -37,6 +36,7 @@ from citeproof.binder.entailment import EntailmentModel
 from citeproof.binder.spans import Span, candidate_spans, find_anchor
 from citeproof.binder.symbolic import symbolic_consistency
 from citeproof.eval.models import BinderOutput, ClaimSourcePair
+from citeproof.lexical import content_words, idf_overlap_scores
 
 # Cheap lexical pre-filter: a long real page yields ~2000 candidate sentences, and scoring EVERY one
 # with the (slow) entailment model per claim is the dominant cost of a live query. The supporting
@@ -49,16 +49,6 @@ from citeproof.eval.models import BinderOutput, ClaimSourcePair
 # scan. Disabled (k <= 0) for exact backward-compatibility; a no-op when candidates <= k (short M0
 # sources), so the frozen thresholds and unit tests are untouched.
 _PREFILTER_K = 48
-_WORD_RE = re.compile(r"[a-z0-9]+")
-_STOPWORDS = frozenset(
-    "the a an and or but if then else of to in on at by for with from into over under as is are was "
-    "were be been being it its this that these those they them their he she his her him we us our you "
-    "your i me my not no nor so than too very can could should would may might must will shall do does "
-    "did has have had having which who whom whose what when where why how all any both each few more "
-    "most other some such only own same s t will just don there here out up down off above below "
-    "between through during before after about against among also another because been being get got "
-    "make made many much new now one two three use used using like include including".split()
-)
 
 
 # Non-prose sections (navigation, reference lists, infobox tables) are NOT citable - they mention
@@ -84,13 +74,6 @@ def _is_citable_prose(text: str) -> bool:
     if t.count("|") >= 4:
         return False  # an infobox / wikitable, not a sentence
     return True
-
-
-def _content_words(text: str) -> set[str]:
-    """Distinctive content words (lowercased, >2 chars, stopwords removed) for cheap lexical ranking.
-    Dropping stopwords is what stops a candidate from ranking high on a bare subject overlap like
-    'They are ...' - the exact pattern that mis-ranked an unrelated sentence before."""
-    return {w for w in _WORD_RE.findall(text.lower()) if len(w) > 2 and w not in _STOPWORDS}
 
 
 # Coreference recall: a supporting sentence whose subject is a PRONOUN ("It has been on display at
@@ -129,20 +112,11 @@ def _prefilter_candidates(claim: str, candidates: list[Span], k: int) -> list[Sp
     count more, so 'sunscreen' outweighs 'water'). No-op when k <= 0 or candidates <= k."""
     if k <= 0 or len(candidates) <= k:
         return candidates
-    claim_words = _content_words(claim)
+    claim_words = content_words(claim)
     if not claim_words:
         return candidates[:k]
-    cand_words = [_content_words(c.text) for c in candidates]
-    df: Counter[str] = Counter()
-    for cw in cand_words:
-        df.update(claim_words & cw)
-    n = len(candidates)
-    weight = {w: math.log(1 + n / (1 + df[w])) for w in claim_words}
-    order = sorted(
-        range(len(candidates)),
-        key=lambda i: sum(weight[w] for w in (claim_words & cand_words[i])),
-        reverse=True,
-    )
+    scores = idf_overlap_scores(claim_words, [content_words(c.text) for c in candidates])
+    order = sorted(range(len(candidates)), key=lambda i: scores[i], reverse=True)
     return [candidates[i] for i in order[:k]]
 
 
@@ -220,7 +194,7 @@ class EntailmentBinder:
 
         # 3. Score every candidate on BOTH signals and locate it in the source.
         scored: list[_Scored] = []
-        claim_cw = _content_words(pair.claim)
+        claim_cw = content_words(pair.claim)
         for cand in candidates:
             e = self.entailment.score(pair.claim, cand.text)
             # Coreference recall (see _ANAPHOR_RE): a candidate that opens with a pronoun under-scores
@@ -231,7 +205,7 @@ class EntailmentBinder:
             # candidate alone, so a wrong number/negation in it is still fatal.
             if (self.coref_context and e < self.tau_mc and claim_cw
                     and _has_leading_anaphor(cand.text)
-                    and len(claim_cw & _content_words(cand.text)) / len(claim_cw) >= self.coref_overlap_gate):
+                    and len(claim_cw & content_words(cand.text)) / len(claim_cw) >= self.coref_overlap_gate):
                 ctx = _preceding_context(pair.source_text, cand.start)
                 if ctx:
                     e = max(e, self.entailment.score(pair.claim, f"{ctx} {cand.text}"))

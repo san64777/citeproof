@@ -155,3 +155,52 @@ def test_fake_brain_records_inputs() -> None:
 def test_search_result_is_typed() -> None:
     r = SearchResult(title="t", url="https://x.test")
     assert r.snippet == ""
+
+
+class _RichStub:
+    """A provider that returns full SearchResults (title+url+snippet) for ranking tests."""
+
+    def __init__(self, by_query: "dict[str, list[SearchResult]]") -> None:
+        self._by_query = by_query
+
+    def search(self, query: str, k: int = 6) -> list[SearchResult]:
+        return self._by_query.get(query, [])[:k]
+
+
+def test_domain_key_uses_registrable_domain_not_last_two_labels() -> None:
+    # The bug a naive last-two-labels split has: bbc.co.uk -> 'co.uk' merges every UK site into one
+    # diversity slot. The public-suffix parse keeps the real registrable domain.
+    assert search_mod._domain_key("https://www.bbc.co.uk/news/x") == "bbc.co.uk"
+    assert search_mod._domain_key("https://en.wikipedia.org/wiki/X") == "wikipedia.org"
+    assert search_mod._domain_key("https://de.wikipedia.org/wiki/Y") == "wikipedia.org"
+
+
+def test_rrf_fuse_rewards_cross_list_consensus() -> None:
+    a = SearchResult(title="a", url="https://a.test")
+    b = SearchResult(title="b", url="https://b.test")
+    c = SearchResult(title="c", url="https://c.test")
+    # b is the #2 hit in BOTH lists; a is #1 in only one. RRF consensus lifts b to the top.
+    fused = search_mod._rrf_fuse([[a, b], [c, b]])
+    assert fused[0].url == "https://b.test"
+
+
+def test_relevance_rerank_promotes_the_on_topic_result() -> None:
+    q = "What causes the northern lights aurora?"
+    off = SearchResult(title="Blue Lights (2023 TV series)", url="https://x.test/tv",
+                       snippet="A police procedural drama set in Belfast.")
+    on = SearchResult(title="Aurora", url="https://y.test/aurora",
+                      snippet="The aurora, the northern lights, is caused by solar wind hitting the atmosphere.")
+    ranked = search_mod._relevance_rerank(q, [off, on])  # incoming order puts the tangential one first
+    assert ranked[0].url == "https://y.test/aurora"
+
+
+def test_run_search_demotes_social_platforms_below_articles() -> None:
+    prov = _RichStub({
+        "Cats": [
+            SearchResult(title="Cat video", url="https://www.youtube.com/watch?v=1", snippet="cute cats"),
+            SearchResult(title="Cat", url="https://en.wikipedia.org/wiki/Cat",
+                         snippet="The cat is a domestic species of small carnivorous mammal."),
+        ],
+    })
+    urls = [r.url for r in run_search(prov, "Cats", k=2)]
+    assert urls.index("https://en.wikipedia.org/wiki/Cat") < urls.index("https://www.youtube.com/watch?v=1")
