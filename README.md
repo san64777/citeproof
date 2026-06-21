@@ -47,8 +47,8 @@ highlighted line. That is the whole product: provable, not persuasive.
 
 ## What you get
 
-- A **split-screen web app**: ask a question, get an answer with a **verification ledger**
-  (N cited / M unverified / K excluded-with-verdict).
+- A **split-screen web app**: ask a question, watch the answer **stream in live**, then each sentence
+  is verified and you get a **verification ledger** (N cited / M unverified / K excluded-with-verdict).
 - Every **cited** claim is a link that opens the **snapshot of the source with the supporting line
   highlighted** - click-to-verify.
 - Claims the binder couldn't ground are shown **unverified**, not hidden.
