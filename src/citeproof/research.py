@@ -165,6 +165,7 @@ def run_research(
     timeout: float = 20.0,
     brain_source_chars: int = 4000,
     on_progress: Callable[[str], None] | None = None,
+    on_draft: Callable[[str], None] | None = None,
 ) -> ResearchReport:
     def emit(msg: str) -> None:
         if on_progress is not None:
@@ -223,7 +224,7 @@ def run_research(
     draft = brain.draft(question, [
         SourceContext(url=s.url, title=s.title, text=focus_source(question, s.extracted, brain_source_chars))
         for s in ok
-    ])
+    ], on_token=on_draft)
 
     # The brain abstains with an EXACT sentinel when the sources do not answer the question. That is
     # a control signal, not a claim - return it as the draft with ZERO claims, never verify it (a

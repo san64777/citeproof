@@ -41,6 +41,10 @@
   .src .v.no { background:rgba(248,113,113,.16); color:var(--bad); }
   .src .u { color:var(--dim); word-break:break-all; }
   .empty { color:var(--dim); padding:30px 0; text-align:center; }
+  .drafting { padding:10px 12px; border:1px dashed var(--line); border-radius:8px; color:var(--dim);
+              font-style:italic; white-space:pre-wrap; line-height:1.5; }
+  .drafting .meta { font-size:11px; color:var(--warn); font-style:normal; margin-bottom:8px;
+                    text-transform:uppercase; letter-spacing:.5px; }
 </style>
 </head>
 <body>
@@ -67,6 +71,7 @@ async function research(){
   $('#go').disabled = true;
   const t0 = Date.now();
   let phase = 'Starting...';
+  let draftText = '';
   const tick = setInterval(() => { $('#status').textContent = phase + '  (' + ((Date.now()-t0)/1000|0) + 's)'; }, 250);
   $('#report').innerHTML = '<div class="empty">working...</div>';
   try {
@@ -83,7 +88,8 @@ async function research(){
         const line = buf.slice(0, nl).trim(); buf = buf.slice(nl+1);
         if(!line) continue;
         const ev = JSON.parse(line);
-        if(ev.type === 'progress'){ phase = ev.data; $('#report').innerHTML = '<div class="empty">'+esc(ev.data)+'</div>'; }
+        if(ev.type === 'progress'){ phase = ev.data; if(!draftText){ $('#report').innerHTML = '<div class="empty">'+esc(ev.data)+'</div>'; } }
+        else if(ev.type === 'draft'){ draftText += ev.data; $('#report').innerHTML = '<div class="drafting"><div class="meta">Drafting the answer - every sentence is verified next, and only verified ones are kept</div>'+esc(draftText)+'</div>'; }
         else if(ev.type === 'result'){ result = ev.data; }
         else if(ev.type === 'error'){ errMsg = ev.data; }
       }

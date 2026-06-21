@@ -18,7 +18,7 @@ import tempfile
 import threading
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Protocol
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
@@ -29,10 +29,16 @@ from citeproof.research import MemoryReceiptStore, ResearchReport
 
 _STATIC = Path(__file__).resolve().parent / "static"
 
-# A runner takes (question, urls, on_progress) and returns the report. on_progress (optional) is
-# called with a human-readable status string at each pipeline stage, for live UI feedback.
+# on_progress is called with a human-readable status string at each pipeline stage; on_draft is called
+# with each token of the draft as the writer streams it (for live UI feedback). Both optional.
 ProgressCb = Callable[[str], None]
-ResearchRunner = Callable[[str, "list[str] | None", "ProgressCb | None"], ResearchReport]
+
+
+class ResearchRunner(Protocol):
+    def __call__(
+        self, question: str, urls: list[str] | None,
+        on_progress: ProgressCb | None = None, on_draft: ProgressCb | None = None,
+    ) -> ResearchReport: ...
 
 
 class ResearchRequest(BaseModel):
@@ -80,7 +86,8 @@ def create_app(runner: ResearchRunner, store: MemoryReceiptStore) -> FastAPI:
         def work() -> None:
             try:
                 report = runner(req.question, req.urls or None,
-                                lambda m: events.put(("progress", m)))
+                                lambda m: events.put(("progress", m)),
+                                lambda t: events.put(("draft", t)))
                 events.put(("result", report.model_dump()))
             except Exception as exc:  # surface a clean error line instead of a dropped stream
                 events.put(("error", f"{type(exc).__name__}: {exc}"))
@@ -140,10 +147,11 @@ def build_production_runner(
     out_dir = Path(tempfile.mkdtemp(prefix="citeproof-"))
 
     def runner(question: str, urls: list[str] | None,
-               on_progress: ProgressCb | None = None) -> ResearchReport:
+               on_progress: ProgressCb | None = None,
+               on_draft: ProgressCb | None = None) -> ResearchReport:
         return run_research(question, binder=binder, brain=brain, provider=provider,
                             store=store, out_dir=out_dir, urls=urls, k_sources=k_sources,
-                            on_progress=on_progress)
+                            on_progress=on_progress, on_draft=on_draft)
 
     return runner
 

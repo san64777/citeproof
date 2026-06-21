@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Callable
 from typing import Protocol
 
 from pydantic import BaseModel
@@ -28,7 +29,10 @@ class SourceContext(BaseModel):
 
 
 class Brain(Protocol):
-    def draft(self, question: str, sources: list[SourceContext]) -> str: ...
+    def draft(
+        self, question: str, sources: list[SourceContext],
+        on_token: Callable[[str], None] | None = None,
+    ) -> str: ...
 
 
 # The brain emits this EXACT sentence to abstain when the sources do not answer the question. It is
@@ -77,23 +81,35 @@ class OllamaBrain:
         # claims). The binder verifies every sentence regardless, so this trades nothing for speed.
         self._think = think
 
-    def draft(self, question: str, sources: list[SourceContext]) -> str:
+    def draft(
+        self, question: str, sources: list[SourceContext],
+        on_token: Callable[[str], None] | None = None,
+    ) -> str:
         blocks = [
             f"SOURCE {i + 1} ({s.url}):\n{s.text[:_MAX_SOURCE_CHARS]}"
             for i, s in enumerate(sources)
         ]
         prompt = f"QUESTION: {question}\n\n" + "\n\n".join(blocks)
-        resp = self._client.chat(
-            model=self._model,
-            messages=[{"role": "system", "content": _SYSTEM}, {"role": "user", "content": prompt}],
-            think=self._think,
-            # temperature 0: a grounded research writer should be DETERMINISTIC, not creative - the
-            # draft must restate facts from the sources, and reproducible drafts make the verified
-            # output reproducible (the same question + sources -> the same receipts).
-            options={"temperature": 0.0},
-        )
-        content = resp.message.content if hasattr(resp, "message") else resp["message"]["content"]
-        return _strip_reasoning(content or "").strip()
+        messages = [{"role": "system", "content": _SYSTEM}, {"role": "user", "content": prompt}]
+        # temperature 0: a grounded research writer should be DETERMINISTIC, not creative - the draft
+        # must restate facts from the sources, and reproducible drafts make the verified output
+        # reproducible (the same question + sources -> the same receipts).
+        if on_token is None:
+            resp = self._client.chat(model=self._model, messages=messages, think=self._think,
+                                     options={"temperature": 0.0})
+            content = resp.message.content if hasattr(resp, "message") else resp["message"]["content"]
+            return _strip_reasoning(content or "").strip()
+        # Stream: forward each token to on_token (for live UI feedback) while accumulating the full
+        # draft to return. With think off there is no reasoning in the content stream; _strip_reasoning
+        # on the joined text is a belt-and-suspenders guard.
+        parts: list[str] = []
+        for chunk in self._client.chat(model=self._model, messages=messages, stream=True,
+                                       think=self._think, options={"temperature": 0.0}):
+            delta = chunk.message.content if hasattr(chunk, "message") else chunk["message"]["content"]
+            if delta:
+                parts.append(delta)
+                on_token(delta)
+        return _strip_reasoning("".join(parts)).strip()
 
     def warm(self) -> None:
         """Best-effort: load the model into VRAM and keep it resident (keep_alive=-1), so the FIRST
@@ -126,7 +142,12 @@ class FakeBrain:
         self.last_question: str | None = None
         self.last_sources: list[SourceContext] = []
 
-    def draft(self, question: str, sources: list[SourceContext]) -> str:
+    def draft(
+        self, question: str, sources: list[SourceContext],
+        on_token: Callable[[str], None] | None = None,
+    ) -> str:
         self.last_question = question
         self.last_sources = list(sources)
+        if on_token is not None:
+            on_token(self._scripted)  # stream the whole scripted draft as one chunk
         return self._scripted

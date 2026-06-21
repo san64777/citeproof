@@ -17,9 +17,11 @@ from citeproof.research import (
 
 
 def _runner_factory(store: MemoryReceiptStore):
-    def runner(question: str, urls: list[str] | None, on_progress=None) -> ResearchReport:
+    def runner(question: str, urls: list[str] | None, on_progress=None, on_draft=None) -> ResearchReport:
         if on_progress is not None:
             on_progress("Verifying...")
+        if on_draft is not None:
+            on_draft("A fact.")  # stream the draft token(s)
         rid = store.put("<html><body>RECEIPT BODY</body></html>")
         return ResearchReport(
             question=question, draft="A fact.",
@@ -81,6 +83,8 @@ def test_research_stream_emits_progress_then_result() -> None:
     events = [_json.loads(line) for line in r.text.splitlines() if line.strip()]
     kinds = [e["type"] for e in events]
     assert "progress" in kinds  # at least one progress line streamed
+    assert "draft" in kinds  # the draft streams token-by-token before the result
+    assert "".join(e["data"] for e in events if e["type"] == "draft") == "A fact."
     assert kinds[-1] == "result"  # the final event is the report
     assert events[-1]["data"]["ledger"] == {"cited": 1, "unverified": 0, "excluded": 1}
 
@@ -118,7 +122,7 @@ def test_research_stream_rejects_a_concurrent_query() -> None:
     started = threading.Event()
     release = threading.Event()
 
-    def runner(question: str, urls: list[str] | None, on_progress=None) -> ResearchReport:
+    def runner(question: str, urls: list[str] | None, on_progress=None, on_draft=None) -> ResearchReport:
         started.set()
         release.wait(timeout=10)  # hold the slot until the test lets go
         return ResearchReport(question=question, draft="", claims=[],
