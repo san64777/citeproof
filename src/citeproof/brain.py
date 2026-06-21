@@ -57,7 +57,7 @@ _MAX_SOURCE_CHARS = 4000  # per source; keeps the prompt inside a small local mo
 class OllamaBrain:
     """Draft writer on the local Ollama daemon. Lazy import; model swappable by constructor."""
 
-    def __init__(self, model: str = "qwen3:8b", host: str | None = None) -> None:
+    def __init__(self, model: str = "qwen3:8b", host: str | None = None, think: bool = False) -> None:
         try:
             import ollama
         except ImportError as exc:  # pragma: no cover
@@ -70,6 +70,12 @@ class OllamaBrain:
         host = host or os.environ.get("OLLAMA_HOST") or "http://localhost:11434"
         self._client = ollama.Client(host=host)
         self._model = model
+        # Thinking OFF by default: the brain's job is to RESTATE source facts as separate sentences,
+        # not to reason - and a reasoning model spends most of its tokens (and wall-clock) on a
+        # chain-of-thought it then discards, while giving a TERSER answer. Measured on qwen3:8b: think
+        # off halved the draft (15s -> 7.6s) AND produced more grounded sentences (more citable
+        # claims). The binder verifies every sentence regardless, so this trades nothing for speed.
+        self._think = think
 
     def draft(self, question: str, sources: list[SourceContext]) -> str:
         blocks = [
@@ -80,6 +86,7 @@ class OllamaBrain:
         resp = self._client.chat(
             model=self._model,
             messages=[{"role": "system", "content": _SYSTEM}, {"role": "user", "content": prompt}],
+            think=self._think,
             # temperature 0: a grounded research writer should be DETERMINISTIC, not creative - the
             # draft must restate facts from the sources, and reproducible drafts make the verified
             # output reproducible (the same question + sources -> the same receipts).

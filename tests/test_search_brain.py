@@ -204,3 +204,25 @@ def test_run_search_demotes_social_platforms_below_articles() -> None:
     })
     urls = [r.url for r in run_search(prov, "Cats", k=2)]
     assert urls.index("https://en.wikipedia.org/wiki/Cat") < urls.index("https://www.youtube.com/watch?v=1")
+
+
+def test_ollama_brain_disables_thinking_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The brain RESTATES source facts; it must not burn tokens (and wall-clock) on a discarded
+    # chain-of-thought. Default think=False, passed through to the chat call.
+    import ollama
+    from types import SimpleNamespace
+    from citeproof.brain import OllamaBrain, SourceContext
+
+    calls: dict[str, object] = {}
+
+    class _FakeClient:
+        def __init__(self, host: object = None) -> None: ...
+        def chat(self, **kw: object) -> object:
+            calls.update(kw)
+            return SimpleNamespace(message=SimpleNamespace(content="A fact. Another fact."))
+
+    monkeypatch.setattr(ollama, "Client", _FakeClient)
+    out = OllamaBrain().draft("q?", [SourceContext(url="u", title="t", text="some source text")])
+    assert calls["think"] is False
+    assert out == "A fact. Another fact."
+    assert OllamaBrain(think=True)  # the opt-in path still constructs
