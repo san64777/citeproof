@@ -209,8 +209,9 @@ def test_run_search_demotes_social_platforms_below_articles() -> None:
 def test_ollama_brain_disables_thinking_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     # The brain RESTATES source facts; it must not burn tokens (and wall-clock) on a discarded
     # chain-of-thought. Default think=False, passed through to the chat call.
-    import ollama
     from types import SimpleNamespace
+
+    ollama = pytest.importorskip("ollama")  # only present with the 'binder' extra (CI runs the slim env)
     from citeproof.brain import OllamaBrain, SourceContext
 
     calls: dict[str, object] = {}
